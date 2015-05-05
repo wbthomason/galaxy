@@ -1,0 +1,346 @@
+<html>
+    <head>
+        <script src="three.min.js"></script>
+    </head>
+    <body>
+    </body>
+    <script>
+        var gConst = 6.673 * Math.pow(10, -11);
+        var scene, camera, renderer;
+        var geometry, material;
+        var spheres = [];
+        var move, barnes;
+        var currTime, oldTime;
+        var speed_scale = 30.0;
+        var centerMass;
+        var octree_root;
+        var bounding_box;
+        var threshold = 0.5;
+        var numSpheres = 150;
+        var worldWidth = 4000.0;
+        var frames = 0;
+
+        var mouseX = 0;
+        var mouseY = 0;
+
+        var windowHalfX = window.innerWidth / 2;
+        var windowHalfY = window.innerHeight / 2;
+
+        init();
+        animate();
+
+        function init() {
+            octree_root = { children: [], sphere: null, center: { x: 0.0, y: 0.0, z: 0.0}, position: { x: 0.0, y: 0.0, z: 0.0}, mass: 0.0, width: worldWidth };
+            move = false;
+            barnes = true;
+            scene = new THREE.Scene();
+            centerMass = new THREE.Vector3(0, 0, 0);
+            camera = new THREE.PerspectiveCamera( 75, window.innerWidth / window.innerHeight, 1, 100000 );
+            camera.position.z = 1000;
+            material = new THREE.MeshPhongMaterial( { color: 0xcc0000 } );
+            document.addEventListener( 'mousemove', onDocumentMouseMove, false );
+            document.addEventListener('keypress', function(event) { toggleMovement(document.getElementById('movementButton')); }, false);
+            buildGalaxy(numSpheres);
+            var pointLight =
+                  new THREE.PointLight(0xFFFFFF);
+
+            // set its position
+            pointLight.position.x = 0;
+            pointLight.position.y = 0;
+            pointLight.position.z = 1000;
+            naiveCOM();
+            camera.lookAt(centerMass);
+            bounding_box = new THREE.Mesh(new THREE.BoxGeometry(worldWidth, worldWidth, worldWidth), new THREE.MeshBasicMaterial( { color: 0x00ff00, wireframe: true } ));
+            bounding_box.position.x = 0;
+            bounding_box.position.y = 0;
+            bounding_box.position.z = 0;
+            // add to the scene
+            scene.add(pointLight);
+            scene.add(bounding_box);
+            renderer = new THREE.WebGLRenderer();
+            renderer.setSize( window.innerWidth, window.innerHeight );
+            oldTime = currTime = (new Date).getTime();
+            document.body.appendChild( renderer.domElement );
+
+        }
+
+        function onDocumentMouseMove( event ) {
+
+            mouseX = ( event.clientX - windowHalfX ) * 10;
+            mouseY = ( event.clientY - windowHalfY ) * 10;
+
+        }
+
+        function buildGalaxy(sphereCount) {
+            for(var i = 0; i < sphereCount; ++i) {
+                addSphere();
+            }
+        }
+
+        function updateCenter(node, x, y, z) {
+            node.center.x = x;
+            node.center.y = y;
+            node.center.z = z;
+        }
+
+        function getFreshNode(halfWidth) {
+            return { children: [], sphere: null, center: { x: 0.0, y: 0.0, z: 0.0 }, position: { x: 0.0, y: 0.0, z: 0.0 }, mass: 0.0, width: halfWidth };
+        }
+
+        function insertOctree(root, sphere, depth) {
+            var oldmass = root.mass;
+            root.mass += sphere.mass;
+            root.position.x = (root.position.x * oldmass + sphere.position.x * sphere.mass) / root.mass;
+            root.position.y = (root.position.y * oldmass + sphere.position.y * sphere.mass) / root.mass;
+            root.position.z = (root.position.z * oldmass + sphere.position.z * sphere.mass) / root.mass;
+            if(depth > numSpheres) return;
+            if(root.children.length == 0) {
+                if(root.sphere == null) {
+                    root.sphere = sphere;
+                    return;
+                }
+                
+                var halfWidth = root.width / 2.0;
+                root.children = [[[getFreshNode(halfWidth), getFreshNode(halfWidth)], [getFreshNode(halfWidth), getFreshNode(halfWidth)]],[[getFreshNode(halfWidth), getFreshNode(halfWidth)], [getFreshNode(halfWidth), getFreshNode(halfWidth)]]];
+                
+                updateCenter(root.children[0][1][0], root.center.x - halfWidth, root.center.y + halfWidth, root.center.z - halfWidth);
+                updateCenter(root.children[0][0][0], root.center.x - halfWidth, root.center.y - halfWidth, root.center.z - halfWidth);
+                updateCenter(root.children[0][0][1], root.center.x - halfWidth, root.center.y - halfWidth, root.center.z + halfWidth);
+                updateCenter(root.children[0][1][1], root.center.x - halfWidth, root.center.y + halfWidth, root.center.z + halfWidth);
+                updateCenter(root.children[1][1][0], root.center.x + halfWidth, root.center.y + halfWidth, root.center.z - halfWidth);
+                updateCenter(root.children[1][0][0], root.center.x + halfWidth, root.center.y - halfWidth, root.center.z - halfWidth);
+                updateCenter(root.children[1][0][1], root.center.x + halfWidth, root.center.y - halfWidth, root.center.z + halfWidth);
+                updateCenter(root.children[1][1][1], root.center.x + halfWidth, root.center.y + halfWidth, root.center.z + halfWidth);
+
+                var indices_a = [(sphere.position.x < root.center.x) ? 0 : 1, (sphere.position.y < root.center.y) ? 0 : 1, (sphere.position.z < root.center.z) ? 0 : 1];
+                var indices_b = [(root.sphere.position.x < root.center.x) ? 0 : 1, (root.sphere.position.y < root.center.y) ? 0 : 1, (root.sphere.position.z < root.center.z) ? 0 : 1];
+                insertOctree(root.children[indices_a[0]][indices_a[1]][indices_a[2]], sphere, depth + 1);
+                insertOctree(root.children[indices_b[0]][indices_b[1]][indices_b[2]], root.sphere, depth + 1);
+                root.sphere = null;
+            }
+            else {
+                var indices = [(sphere.position.x < root.center.x) ? 0 : 1, (sphere.position.y < root.center.y) ? 0 : 1, (sphere.position.z < root.center.z) ? 0 : 1];
+                insertOctree(root.children[indices[0]][indices[1]][indices[2]], sphere, depth + 1);
+            }
+        }
+        
+        function animate() {
+            
+
+            if(move) {
+                if(barnes) {
+                    octree_root = { children: [], sphere: null, center: { x: 0.0, y: 0.0, z: 0.0}, position: { x: 0.0, y: 0.0, z: 0.0}, mass: 0.0, width: worldWidth };
+                    for(var i = 0; i < spheres.length; ++i) {
+                        insertOctree(octree_root, spheres[i], 1);
+                    }
+
+                    barnesHut();
+                }
+                else {
+                    naive();
+                }
+
+               collide();
+            }
+
+            camera.position.x += ( mouseX - camera.position.x ) * .05;
+            camera.position.y += ( - mouseY - camera.position.y ) * .05;
+
+            camera.lookAt( scene.position );
+            renderer.render( scene, camera );
+        
+            requestAnimationFrame( animate );
+        }
+
+        function barnesHut() {
+            var timediff = currTime - oldTime;
+            timediff *= speed_scale;
+            oldTime = currTime;
+            currTime = (new Date()).getTime();
+            for(var i = 0; i < spheres.length; ++i) {
+                var sphere = spheres[i];
+                var force = getForce(octree_root, sphere, 1); 
+
+                sphere.accel.x = force.x / sphere.mass;
+                sphere.accel.y = force.y / sphere.mass;
+                sphere.accel.z = force.z / sphere.mass;
+                sphere.veloc.x += sphere.accel.x * timediff;
+                sphere.veloc.y += sphere.accel.y * timediff;
+                sphere.veloc.z += sphere.accel.z * timediff;
+
+                sphere.position.x += sphere.veloc.x * timediff;
+                sphere.position.y += sphere.veloc.y * timediff;
+                sphere.position.z += sphere.veloc.z * timediff;
+
+                if(sphere.position.x > (worldWidth/2)) { sphere.veloc.x *= -1; sphere.position.x = (worldWidth/2); }
+                else if(sphere.position.x < -(worldWidth/2)) { sphere.veloc.x *= -1; sphere.position.x = -(worldWidth/2); }
+                if(sphere.position.y > (worldWidth/2)) { sphere.veloc.y *= -1; sphere.position.y = (worldWidth/2); }
+                else if(sphere.position.y < -(worldWidth/2)) { sphere.veloc.y *= -1; sphere.position.y = -(worldWidth/2); }
+                if(sphere.position.z > (worldWidth/2)) { sphere.veloc.z *= -1; sphere.position.z = (worldWidth/2); }
+                else if(sphere.position.z < -(worldWidth/2)) { sphere.veloc.z *= -1; sphere.position.z = -(worldWidth/2); }
+            }
+        }
+
+        function getForce(root, sphere, depth) {
+            if((root.children.length === 0 && root.sphere !== sphere) || (root.width / dist(sphere, root) < threshold) || (depth > numSpheres)) {
+                var r12 = { x: sphere.position.x - root.position.x, y: sphere.position.y - root.position.y, z: sphere.position.z - root.position.z };
+                var mag_r12 = Math.sqrt(Math.pow(r12.x, 2) + Math.pow(r12.y, 2) + Math.pow(r12.z, 2));
+                var r12hat = { x: r12.x / mag_r12, y: r12.y / mag_r12, z: r12.z / mag_r12 };
+                var scale = -gConst * sphere.mass * root.mass / Math.pow(mag_r12, 2);
+                return { x: scale * r12hat.x, y: scale * r12hat.y, z: scale * r12hat.z };
+            }
+            
+            var force = { x: 0.0, y: 0.0, z: 0.0 };
+
+            for(var i = 0; i < root.children.length; ++i) {
+                for(var j = 0; j < root.children[i].length; ++j) {
+                    for(var k = 0; k < root.children[i][j].length; ++k) {
+                        var sub_force = getForce(root.children[i][j][k], sphere, depth + 1);
+                        force.x += sub_force.x;
+                        force.y += sub_force.y;
+                        force.z += sub_force.z;
+                    }
+                }
+            }
+
+            return force;
+        }
+
+        function naive() {
+            var timediff = currTime - oldTime;
+            timediff *= speed_scale;
+            oldTime = currTime;
+            currTime = (new Date()).getTime();
+            for(var i = 0; i < spheres.length; ++i) {
+                var force = { x: 0.0, y: 0.0, z: 0.0 };
+                var sphere_a = spheres[i];
+                for(var j = 0; j < spheres.length; ++j) {
+                    if(j === i) continue;
+                    var sphere_b = spheres[j];
+                    var r12 = { x: sphere_a.position.x - sphere_b.position.x, y: sphere_a.position.y - sphere_b.position.y, z: sphere_a.position.z - sphere_b.position.z };
+                    var mag_r12 = Math.sqrt(Math.pow(r12.x, 2) + Math.pow(r12.y, 2) + Math.pow(r12.z, 2));
+                    var r12hat = { x: r12.x / mag_r12, y: r12.y / mag_r12, z: r12.z / mag_r12 };
+                    var scale = -gConst * sphere_a.mass * sphere_b.mass / Math.pow(mag_r12, 2);
+                    force.x += scale * r12hat.x;
+                    force.y += scale * r12hat.y;
+                    force.z += scale * r12hat.z;
+                }
+
+                sphere_a.accel.x = force.x / sphere_a.mass;
+                sphere_a.accel.y = force.y / sphere_a.mass;
+                sphere_a.accel.z = force.z / sphere_a.mass;
+                sphere_a.veloc.x += sphere_a.accel.x * timediff;
+                sphere_a.veloc.y += sphere_a.accel.y * timediff;
+                sphere_a.veloc.z += sphere_a.accel.z * timediff;
+            }
+
+            for(var i = 0; i < spheres.length; ++i) {
+                var sphere_a = spheres[i];
+                sphere_a.position.x += sphere_a.veloc.x * timediff;
+                sphere_a.position.y += sphere_a.veloc.y * timediff;
+                sphere_a.position.z += sphere_a.veloc.z * timediff;
+                if(sphere_a.position.x > (worldWidth/2)) { sphere_a.veloc.x *= -1; sphere_a.position.x = (worldWidth/2); }
+                else if(sphere_a.position.x < -(worldWidth/2)) { sphere_a.veloc.x *= -1; sphere_a.position.x = -(worldWidth/2); }
+                if(sphere_a.position.y > (worldWidth/2)) { sphere_a.veloc.y *= -1; sphere_a.position.y = (worldWidth/2); }
+                else if(sphere_a.position.y < -(worldWidth/2)) { sphere_a.veloc.y *= -1; sphere_a.position.y = -(worldWidth/2); }
+                if(sphere_a.position.z > (worldWidth/2)) { sphere_a.veloc.z *= -1; sphere_a.position.z = (worldWidth/2); }
+                else if(sphere_a.position.z < -(worldWidth/2)) { sphere_a.veloc.z *= -1; sphere_a.position.z = -(worldWidth/2); }
+            }
+
+            //naiveCOM();
+        }
+        
+        function collide() {
+            // Handle collisions simply
+            for(var i = 0; i < spheres.length; ++i) {
+                var sphere_a = spheres[i];
+                for(var j = 0; j < spheres.length; ++j) {
+                    if(j === i) continue;
+                    var sphere_b = spheres[j];
+                    if(dist(sphere_a, sphere_b) <= Math.max(sphere_a.geometry.radius, sphere_b.geometry.radius)) {
+                        var mass_sum = sphere_a.mass + sphere_b.mass;
+                        var mass_diff = sphere_a.mass - sphere_b.mass;
+                        sphere_a.veloc.x = (sphere_a.veloc.x * mass_diff + 2 * sphere_b.mass * sphere_b.veloc.x) / mass_sum;
+                        sphere_a.veloc.y = (sphere_a.veloc.y * mass_diff + 2 * sphere_b.mass * sphere_b.veloc.y) / mass_sum;
+                        sphere_a.veloc.z = (sphere_a.veloc.z * mass_diff + 2 * sphere_b.mass * sphere_b.veloc.z) / mass_sum;
+                        sphere_b.veloc.x = (sphere_b.veloc.x * -mass_diff + 2 * sphere_a.mass * sphere_a.veloc.x) / mass_sum;
+                        sphere_b.veloc.y = (sphere_b.veloc.y * -mass_diff + 2 * sphere_a.mass * sphere_a.veloc.y) / mass_sum;
+                        sphere_b.veloc.z = (sphere_b.veloc.z * -mass_diff + 2 * sphere_a.mass * sphere_a.veloc.z) / mass_sum;
+                    }
+                }
+            }
+        }
+
+        function naiveCOM() {
+            var sum_mass = 0.0;
+            var com_x = 0.0;
+            var com_y = 0.0;
+            var com_z = 0.0;
+            for(var i = 0; i < spheres.length; ++i) {
+                com_x += spheres[i].mass * spheres[i].position.x;
+                com_y += spheres[i].mass * spheres[i].position.y;
+                com_z += spheres[i].mass * spheres[i].position.z;
+                sum_mass += spheres[i].mass;
+            }
+
+            com_x /= sum_mass;
+            com_y /= sum_mass;
+            com_z /= sum_mass;
+
+            centerMass.set(com_x, com_y, com_z);
+        }
+
+        function rand(low, high) {
+            return Math.floor(Math.random() * (high - low + 1)) + low;
+        }
+    
+        function toggleMovement(button) {
+            button.value = move ? "Start" : "Stop";
+            move = !move;
+            oldTime = currTime = (new Date()).getTime();
+        }
+
+        function toggleAlgo(button) {
+            button.value = barnes ? "Switch to Barnes-Hut" : "Switch to naive method";
+            barnes = !barnes;
+            oldTime = currTime = (new Date()).getTime();
+        }
+
+        function changeSpeed(speed) {
+            speed_scale = parseFloat(speed);
+        }
+        
+        function addSphere() {
+            var mass = rand(100000000, 500000000);
+            var sphere = new THREE.Mesh( new THREE.SphereGeometry(10 * (1 - mass/500000000) + 120 * (mass/500000000), 16, 16), material.clone() );
+            sphere.position.x = rand(-1000, 1000);
+            sphere.position.y = rand(-1000, 1000);
+            sphere.position.z = rand(-1000, 1000);
+            sphere.mass = mass;
+            sphere.accel = { x: 0.0, y: 0.0, z: 0.0 };
+            sphere.veloc = { x: 0.0, y: 0.0, z: 0.0 };
+            sphere.material.color.setRGB(Math.random(), Math.random(), Math.random());
+            spheres.push(sphere);
+            scene.add( sphere );
+            insertOctree(octree_root, sphere, 1);
+        }
+
+        function dist(sphere_a, sphere_b) {
+            return Math.sqrt(
+                    Math.pow(sphere_a.position.x - sphere_b.position.x, 2) +
+                    Math.pow(sphere_a.position.y - sphere_b.position.y, 2) +
+                    Math.pow(sphere_a.position.z - sphere_b.position.z, 2)
+                    );
+        }
+
+    </script>
+    <body>
+        <br/>
+        <input id="movementButton" type="button" value="Start" onclick="toggleMovement(this)"/>
+        <input type="button" value="Switch to naive" onclick="toggleAlgo(this)"/>
+        <button onclick="addSphere()">Add a sphere</button>
+        <span>Speed:</span>
+        <input type="text" id="speed" value="30" onchange="changeSpeed(document.getElementById('speed').value)"/>
+    </body>
+
+</html>
